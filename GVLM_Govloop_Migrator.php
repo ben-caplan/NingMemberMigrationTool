@@ -58,7 +58,7 @@
 		private function addUser($data){
 			global $wpdb;
 			//possibly change this to look for existance of ning username in usermeta table instead
-			$record = $wpdb->get_row( "SELECT * FROM {$wpdb->base_prefix}users WHERE user_email='{$data['email']}'" );
+			$record = $wpdb->get_row( "SELECT ID, user_email FROM {$wpdb->base_prefix}users WHERE user_email='{$data['email']}'" );
 
 			if( $record ){
 				$this->user = $record->ID;
@@ -78,6 +78,8 @@
 					array('%s', '%s', '%s', '%s', '%s')
 				);
 				$this->user = $wpdb->insert_id;
+				//ADD USER TO MEMBER LOOK UP TABLE
+				
 
 				//output feedback
 				if( $wpdb->insert_id ) WP_CLI::success( 'User ' . $data['fullName'] . ' entered!' );
@@ -106,7 +108,7 @@
 			$dbPrefix = $wpdb->base_prefix;
 		
 			if( !empty($comm) ){
-				$uidData = $wpdb->get_row( "SELECT * FROM {$dbPrefix}usermeta WHERE meta_key='ning_contributorName' AND meta_value='{$comm['contributorName']}'" );
+				$uidData = $wpdb->get_row( "SELECT umeta_id, user_id FROM {$dbPrefix}usermeta WHERE meta_key='ning_contributorName' AND meta_value='{$comm['contributorName']}'" );
 				if( !empty($uid) ){
 					$uid = $uidData->user_id;
 					$commentAdded = $wpdb->insert(
@@ -139,7 +141,7 @@
 			if( empty($field) ) WP_CLI::warning('PROFILE DATA: profile field with ID of "' .$field. '" not found. This type does not yet exist, so no record has been added.');
 			else{
 				//see if record already exists for user
-				$record = $wpdb->get_row( "SELECT * FROM {$dbPrefix}bp_xprofile_data WHERE user_id='{$uid}' AND field_id='{$field}'" );
+				$record = $wpdb->get_row( "SELECT id FROM {$dbPrefix}bp_xprofile_data WHERE user_id='{$uid}' AND field_id='{$field}'" );
 				if( $record ) return WP_CLI::line('PROFILE DATA: a record already exists for this user.');
 				else{
 					//add profile data
