@@ -114,28 +114,35 @@
 			}//!empty($jsonItem)
 			else{ 
 				//IF BAD RECORD RERUN CODE - try to fix JSON - only try to fix once (prevent infinite loop...)
+				$updatedJson = $jsonStringToParse;
 				if( $this->isGoodJson === true ){
 					//fix { or } in middle of string
 					switch($tryNum){
 						case 1: 
-							$updatedJosn = preg_replace('/("[a-zA-Z0-9][^\{\}\[\]"]*)(\{|\})([^\{\}\[\]"]*")/',"$1 $3",$jsonStringToParse);
+							echo 'case 1';
+							$updatedJson = preg_replace('/("[a-zA-Z0-9][^\{\}\[\]"]*)(\{|\})([^\{\}\[\]"]*")/',"$1 $3",$jsonStringToParse);
 							break;
 						case 2: 
-							$updatedJosn = preg_replace('/("description": ?".*"),?\n?[^\}"]*\},?/',"$1",$updatedJosn);//fix broken comments
+							echo 'case 2';
+							$updatedJson = preg_replace('/("description": ?".*"),?\n?[^\}"]*\},?/',"$1",$jsonStringToParse);//fix broken comments
 							$this->isGoodJson = false;
+							break;
+						case 3: 
+							echo 'case 3';
 							break;
 					}
 					//run updated string
-					$this->parseJsonString( $updatedJosn, $i , $tryNum);
+					$tryNum++;
+					$this->parseJsonString( $updatedJson, $i , $tryNum);
 				}
 				else{
 					$this->badRecords++;
 					$this->isGoodJson = true;
 					$this->run = false;
 				}
-				$this->badJSON = !empty($updatedJosn) ? $updatedJosn : $jsonStringToParse;
+				$this->badJSON = $updatedJson;
 				
-				WP_CLI::warning("JSON ERROR: bad JSON (starting at char #{$this->startBracketLocation}) - Try number . $tryNum\n");
+				WP_CLI::warning("JSON ERROR: bad JSON (starting at char #{$this->startBracketLocation})\n");
 			}
 
 			//add member
