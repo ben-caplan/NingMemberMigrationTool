@@ -1,14 +1,4 @@
 <?php
-	/*
-		TODO:
-		- build script - create profile field in DB dynamically
-		- Sanatize DB writes
-		- make $fieldDataModel dynamic
-		- clean up script - remove usermeta?
-		- make error messages more useful
-		- refactor to tidy up
-	*/
-
 	/**
 	 * Output syntax for command
 	 */
@@ -22,8 +12,7 @@
 	 */
 	class GVLM_Govloop_To_SQL_Migrator extends WP_CLI_Command {
 		//LOCAL VARS
-		private $count = 0,
-				$startTime,
+		private $startTime,
 				$startBracketLocation = 0,
 				$numRecordsAdded = 0,
 				$numberRecords = 0,
@@ -66,34 +55,45 @@
 
 		//PARSE JSON STRING
 		function parseJsonString( $jsonStringToParse, $i, $tryNum=1 ){
-			echo "\n\n*************" . substr($jsonStringToParse, 0, 100) . "*************\n\n";
 			global $wpdb;
 			$dbPrefix = $wpdb->base_prefix;
 			$jsonItem = json_decode( $jsonStringToParse, true );
-
+			$requiredFields = array( "email", "contributorName", "fullName", "createdDate", "fullName", "gender", "location", "country", "zip", "birthdate" );
 			if( !empty($jsonItem) ){
 				$dataArray = array();
-				$user = $wpdb->get_row("SELECT uid FROM {$dbPrefix}temp_members WHERE contributorName='{$jsonItem['contributorName']}'");
-				
-				if( empty($user) ){
-					//build dataArray
-					foreach( $jsonItem as $fieldKey=>$fieldValue ){
-						if( in_array($fieldKey, $this->fieldDataModel) ){
-							//build dataArray
-							if( !empty($fieldValue) && is_array($fieldValue) ){
-								if( $fieldKey !== 'comments' ){
-									foreach( $fieldValue as $subFieldKey=>$subFieldValue ){
-										$dbKey = array_search($subFieldKey, $this->fieldDataModel['profileQuestions']);
-										if( $dbKey ){
-											$dataArray[$dbKey] = $subFieldValue;
-										}
+				$user = $wpdb->get_row("SELECT contributorName FROM {$dbPrefix}temp_members WHERE contributorName='{$jsonItem['contributorName']}'");
+				$timeStamp = date('Y-m-d H:i:s');
+
+				//build dataArray
+				foreach( $jsonItem as $fieldKey=>$fieldValue ){
+					if( in_array($fieldKey, $this->fieldDataModel) ){
+						//build dataArray
+						if( !empty($fieldValue) && is_array($fieldValue) ){
+							if( $fieldKey !== 'comments' ){
+								foreach( $fieldValue as $subFieldKey=>$subFieldValue ){
+									$dbKey = array_search($subFieldKey, $this->fieldDataModel['profileQuestions']);
+									if( $dbKey ){
+										$dataArray[$dbKey] = $subFieldValue;
 									}
 								}
-							}//is_array($fieldValue)
-							else $dataArray[$fieldKey] = $fieldValue;
-						}//in_array($fieldKey, $this->fieldDataModel)
-					}//foreach $jsonItem
+							}
+						}//is_array($fieldValue)
+						else $dataArray[$fieldKey] = $fieldValue;
+					}//in_array($fieldKey, $this->fieldDataModel)
+				}//foreach $jsonItem
 
+				
+				//WHICH FIELDS ARE MISSING?
+				foreach( $requiredFields as $field ){
+					$warningArray = array();
+					if( empty($dataArray[$field]) ) $warningArray[] = $field;
+				}
+				if( !empty($warningArray) ) WP_CLI::warning("PROFILE DATA: (starting at char #{$this->startBracketLocation}) User " . $dataArray['contributorName'] . ' does not have the following data: ' .implode(', ', $warningArray));
+
+
+				//ADD DATA TO DATABASE
+				if( empty($user) ){
+					//NEW RECORD
 					//add data to database
 					$dataAdded = $wpdb->insert(
 						$dbPrefix.'temp_members',
@@ -102,33 +102,45 @@
 
 					//output feedback
 					if( $dataAdded ){
-						$timeStamp = date('Y-m-d H:i:s');
-						WP_CLI::success("{$timeStamp}: Record added!");
-						$this->count++;
-						$this->numRecordsAdded++;
+						WP_CLI::success("{$timeStamp}: Record added! (starting at char #{$this->startBracketLocation})");
 						$this->stillBroken = false;
+						//add member
+						$this->numMembers++;
+						$this->numberRecords++;
+						$this->numRecordsAdded++;
 					}
-					else WP_CLI::warning('PROFILE DATA: upload failed. Something went wrong with the upload.');
+					else WP_CLI::warning("PROFILE DATA: upload failed. Something went wrong with the upload (starting at char #{$this->startBracketLocation}).");
 				}//empty($user)
-				else WP_CLI::warning('PROFILE DATA: User '.$jsonItem['contributorName'].' already exists.');
+				else{
+					//UPDATE RECORD?
+					WP_CLI::warning("PROFILE DATA: {$timeStamp}: (starting at char #{$this->startBracketLocation}) request to update user {$jsonItem['contributorName']}");
+					$this->numMembers++;
+				}//!empty($user)
 			}//!empty($jsonItem)
 			else{ 
-				//IF BAD RECORD RERUN CODE - try to fix JSON - only try to fix once (prevent infinite loop...)
+				//IF BAD RECORD RERUN CODE - try to fix JSON
 				$updatedJson = $jsonStringToParse;
 				if( $this->isGoodJson === true ){
-					//fix { or } in middle of string
+					//REGEX PATTERNS
+					$pattern1 = '/("[a-zA-Z0-9][^\{\}\[\]"]*)(\{|\})([^\{\}\[\]"]*")/';
+					$pattern2 = '/"}(,"createdDate")/';
+					//SPECIFIC ISSUES - fix attempts (more specialized then the larger fixes in updateTable())
 					switch($tryNum){
-						case 1: 
-							echo 'case 1';
-							$updatedJson = preg_replace('/("[a-zA-Z0-9][^\{\}\[\]"]*)(\{|\})([^\{\}\[\]"]*")/',"$1 $3",$jsonStringToParse);
+						case 1:
+							$updatedJson = preg_replace('/\n/',' ',$updatedJson);//fix line breaks
 							break;
-						case 2: 
-							echo 'case 2';
-							$updatedJson = preg_replace('/("description": ?".*"),?\n?[^\}"]*\},?/',"$1",$jsonStringToParse);//fix broken comments
-							$this->isGoodJson = false;
+						case 2:
+							//fix { or } in middle of string
+							$updatedJson = preg_replace($pattern1,"$1 $3",$jsonStringToParse);
 							break;
 						case 3: 
-							echo 'case 3';
+							//fix broken comment(s): "},"createdDate"
+							if( preg_match($pattern1, $jsonStringToParse) ) $updatedJson = preg_replace('/"}(,"createdDate")/', '"$1', $updatedJson);
+							$updatedJson = preg_replace($pattern2, '"$1', $updatedJson);
+							break;
+						case 4:
+							$updatedJson = preg_replace('/\}"/','"}',$updatedJson);
+							$this->isGoodJson = false;
 							break;
 					}
 					//run updated string
@@ -139,16 +151,15 @@
 					$this->badRecords++;
 					$this->isGoodJson = true;
 					$this->run = false;
+					//add member
+					$this->numMembers++;
+					$this->numberRecords++;
+					
+					//BAD JSON :-(
+					$this->badJSON = $updatedJson;
+					WP_CLI::warning("JSON ERROR: bad JSON (starting at char #{$this->startBracketLocation})\n");
 				}
-				$this->badJSON = $updatedJson;
-				
-				WP_CLI::warning("JSON ERROR: bad JSON (starting at char #{$this->startBracketLocation})\n");
 			}
-
-			//add member
-			$this->numMembers++;
-			$this->numberRecords++;
-
 			return true;
 		}//parseJsonString()
 
@@ -164,13 +175,13 @@
 			$json = file_get_contents(dirname(__FILE__)."/../json/{$iArr[0]}");
 
 			//FIX "BAD" JSON
-			$json = preg_replace('/\}"/','"}',$json);//fix }"
-			$json = preg_replace('/\}\{/','},{',$json);//fix }{ 
-			$json = preg_replace('/\n/',' ',$json);//fix line breaks
-			$json = preg_replace('/\]\{/',',{',$json);//fix ]{
+			$json = preg_replace('/((;|:)-?)\}/', '$1&#125;', $json);// fix :-}
+			$json = preg_replace('/\]\{/',',{',$json);//fix ]{ -> ,{
+			$json = preg_replace('/\}( |\n)?\{/','},{',$json);//fix }{ -> },{
+			$json = preg_replace('/\}\]\{/','},{',$json);//fix }]{ -> },{
 
 			//LOOPING VARS
-			$startChar = 84964120;//1;
+			$startChar = 1;
 			$stopChar = strlen($json);
 			$numBrackets = 0;
 			$this->startTime = date('Y-m-d H:i:s');
