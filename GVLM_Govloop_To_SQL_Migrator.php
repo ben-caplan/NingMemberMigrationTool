@@ -54,7 +54,7 @@
 
 
 		//PARSE JSON STRING
-		function parseJsonString( $jsonStringToParse, $i, $tryNum=1 ){
+		private function parseJsonString( $jsonStringToParse, $i, $tryNum=1 ){
 			global $wpdb;
 			$dbPrefix = $wpdb->base_prefix;
 			$jsonItem = json_decode( $jsonStringToParse, true );
