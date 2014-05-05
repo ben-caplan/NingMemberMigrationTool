@@ -1,5 +1,9 @@
 <?php
 	/*
+		NEED TO DO:
+		- update map to BP bp_xprofile_data (indexes of profileQuestions array)
+		- update comments logic
+
 		private
 			-> generatePassword( $length )
 			-> parseJsonString( $jsonStringToParse, $characterPosition, $tryNumber=1 )
@@ -26,6 +30,7 @@
 				$numberRecords = 0,
 				$incompleteRecords = 0,
 				$incompleteRecordsDups = 0,
+				$numComments = 0,
 				$badRecords = 0,
 				$numMembers = 0,
 				$run = true,
@@ -36,7 +41,6 @@
 				$fieldDataModel = array(
 					"email",
 					"contributorName",
-					"fullName",
 					"createdDate",
 					"fullName",
 					"gender",
@@ -45,17 +49,18 @@
 					"zip",
 					"birthdate",
 					"profileQuestions" => array(
-						"Type of Government",
-						"Current Title:",
-						"Current Agency or Organization",
-						"What Best Describes Your Role?",
-						"Educational Background (Degree, School):",
-						"Profile Links - Blog, Twitter, LinkedIn, Facebook",
-						"Topics I Care About",
-						"Are you involved (buy, recommend, influence) in the purchase of:",
-						"How Did You Hear About GovLoop?",
-						"I work for the government because:",
-						"My favorite public servant is:"
+						//1 => 'Full Name'
+						'2' => "Type of Government",
+						'3' => "Current Title:",
+						'4' => "Current Agency or Organization",
+						'5' => "What Best Describes Your Role?",
+						'6' => "Educational Background (Degree, School):",
+						'7' => "Profile Links - Blog, Twitter, LinkedIn, Facebook",
+						'8' => "Topics I Care About",
+						'9' => "Are you involved (buy, recommend, influence) in the purchase of:",
+						'10' => "How Did You Hear About GovLoop?",
+						'11' => "I work for the government because:",
+						'12' => "My favorite public servant is:"
 					),
 					"profilePhoto"
 				);
@@ -75,36 +80,36 @@
 			$jsonItem = json_decode( $jsonStringToParse, true );
 			$requiredFields = array( "email", "contributorName", "fullName", "createdDate", "fullName", "gender", "location", "country", "zip", "birthdate" );
 			if( !empty($jsonItem) ){
-				$dataArray = array();
+				$dataArray = array( 'profile_data' => array() );
 				$user = $wpdb->get_row("SELECT wp_id FROM {$dbPrefix}ning_user_lookup WHERE ning_id='{$jsonItem['contributorName']}'");
 				$timeStamp = date('Y-m-d H:i:s');
-
-				
-				//WHICH FIELDS ARE MISSING?
-				$warningArray = array();
-				foreach( $requiredFields as $field ){
-					if( empty($jsonItem[$field]) ) $warningArray[] = $field;
-				}
-				if( preg_match('/(email|contributorName|fullName)/', implode(' ', $warningArray) ) ){
-					$this->incompleteRecords++;
-					if(!empty($user)) $incompleteRecordsDups++;
-					return WP_CLI::warning("***PROFILE DATA: (starting at char #{$this->startBracketLocation}) User " . $jsonItem['contributorName'] . ' does not have the following data: ' .implode(', ', $warningArray) . '***');
-				}
-				if( !empty($warningArray) ) WP_CLI::warning("PROFILE DATA: (starting at char #{$this->startBracketLocation}) User " . $jsonItem['contributorName'] . ' does not have the following data: ' .implode(', ', $warningArray));
 
 
 				//ADD USER
 				if( $action === 'users' ){
-					//build dataArray
+					//WHICH FIELDS ARE MISSING?
+					$warningArray = array();
+					foreach( $requiredFields as $field ){
+						if( empty($jsonItem[$field]) ) $warningArray[] = $field;
+					}
+					if( preg_match('/(email|contributorName|fullName)/', implode(' ', $warningArray) ) ){
+						$this->incompleteRecords++;
+						if(!empty($user)) $incompleteRecordsDups++;
+						return WP_CLI::warning("***PROFILE DATA: (starting at char #{$this->startBracketLocation}) User " . $jsonItem['contributorName'] . ' does not have the following data: ' .implode(', ', $warningArray) . '***');
+					}
+					if( !empty($warningArray) ) WP_CLI::warning("PROFILE DATA: (starting at char #{$this->startBracketLocation}) User " . $jsonItem['contributorName'] . ' does not have the following data: ' .implode(', ', $warningArray));
+					
+
+					//BUILD DATA ARRAY
 					foreach( $jsonItem as $fieldKey=>$fieldValue ){
 						if( in_array($fieldKey, $this->fieldDataModel) ){
 							//build dataArray
 							if( !empty($fieldValue) && is_array($fieldValue) ){
-								if( $fieldKey !== 'comments' ){
+								if( $fieldKey === 'users' ){
 									foreach( $fieldValue as $subFieldKey=>$subFieldValue ){
 										$dbKey = array_search($subFieldKey, $this->fieldDataModel['profileQuestions']);
 										if( $dbKey ){
-											$dataArray[$dbKey] = $subFieldValue;
+											$dataArray['profile_data'][$dbKey] = $subFieldValue;
 										}
 									}
 								}
@@ -128,14 +133,27 @@
 							$this->numRecordsAdded++;
 						}
 						else WP_CLI::warning("PROFILE DATA: upload failed. Something went wrong with the upload (starting at char #{$this->startBracketLocation}).");
+
+						//ADD PROFILE DATA
+						if( !empty($dataArray['profile_data']) ){
+							foreach( $dataArray['profile_data'] as $field=>$value ){
+								$profileDataAdded = $this->addProfileData( $field, $value );
+							}
+						}
 					}//empty($user)
 					else{
 						//UPDATE RECORD?
 						WP_CLI::warning("PROFILE DATA: {$timeStamp}: (starting at char #{$this->startBracketLocation}) request to update user {$jsonItem['contributorName']}");
 					}//!empty($user)
 				}//$action = user?
+				//ADD COMMENTS
 				elseif( $action === 'comments' ){
-
+					if( !empty($jsonItem['comments']) ){
+						foreach( $jsonItem['comments'] as $comment ){
+							$this->addComment( $comment, $user->wp_id );
+						}
+					}
+					else WP_CLI::line("User {$jsonItem['contributorName']} does not have any comments, moving on...");
 				}
 				else WP_CLI::warning("Unrecognized action ('{$action}')");
 			}//!empty($jsonItem)
@@ -185,6 +203,7 @@
 		}//parseJsonString()
 
 
+
 		//ADD USER
 		private function addUser($data){
 			global $wpdb;
@@ -203,7 +222,8 @@
 				$wpdb->insert(
 					$wpdb->base_prefix.'users', 
 					array(
-						'user_login' => str_replace('@', '_', $data['email']),
+						'user_login' => $data['contributorName'],
+						'user_nicename' => $data['fullName'],
 						'user_pass' => md5( $this->generatePassword(20) ),
 						'user_email' => $data['email'],
 						'user_registered' => $data['createdDate'],
@@ -212,7 +232,11 @@
 					array('%s', '%s', '%s', '%s', '%s')
 				);
 				$user = $this->user = $wpdb->insert_id;
-				if( $this->user ) $recordsAdded = true;
+				if( $this->user ){
+					$recordsAdded = true;
+					//ADD PROFILE DATA HERE!!!!
+					$this->addProfileData( '1', $data['fullName'] );
+				}
 				$feedback .= $data['contributorName'] . ($wpdb->insert_id ? " " : " NOT ") . "added to user table";
 
 				//ADD USER TO MEMBER LOOK UP TABLE
@@ -235,34 +259,48 @@
 		}//addUser()
 
 
+
 		//ADD COMMENT
-		private function addComment($comm){
+		private function addComment($comm, $userUid){
 			global $wpdb;
 			$dbPrefix = $wpdb->base_prefix;
+			$url = get_bloginfo( 'url' );
+			$timeStamp = date( 'Y-m-d H:i:s', time() );
 		
-			if( !empty($comm) ){
-				$uidData = $wpdb->get_row( "SELECT umeta_id, user_id FROM {$dbPrefix}usermeta WHERE meta_key='ning_contributorName' AND meta_value='{$comm['contributorName']}'" );
-				if( !empty($uid) ){
-					$uid = $uidData->user_id;
-					$commentAdded = $wpdb->insert(
-						$wpdb->base_prefix.'bp_activity', 
-						array(
-							'user_id' => $uid,
-							'component' => 'activity',
-							'type' => 'activity_update',
-							'action' => '',
-							'content' => $comm['description'],
-							'date_recorded' => $comm['createdDate']
-						), 
-						array('%d', '%s', '%s', '%d', '%s', '%s')
-					);
-					//output feedback
-					if( $commentAdded ) WP_CLI::success('Comment added!');
-					else WP_CLI::warning('COMMENT: upload failed. Something went wrong with the upload.');
-				}
-				else WP_CLI::warning('COMMENT: upload failed. No user with a Ning ID of ' . $comm['contributorName'] . ' was found.');
-			}
+			if( !empty($comm) && !empty($userUid) ){
+				$commentUser = $wpdb->get_row( "SELECT wp_id, ning_id FROM {$dbPrefix}ning_user_lookup WHERE ning_id='{$comm['contributorName']}'" );
+				if( !empty($commentUser) ){
+					$commentUid = $commentUser->wp_id;
+					$existingComment = $wpdb->get_row( "SELECT id FROM {$dbPrefix}bp_activity WHERE user_id='{$commentUid}' AND secondary_item_id='".str_replace( ':Comment:', '-', $comm['id'] )."'" );
+					if( empty($existingComment) ){
+						$commentAdded = $wpdb->insert(
+							$wpdb->base_prefix.'bp_activity', 
+							array(
+								'user_id' => $commentUid,
+								'component' => 'ning_comment',// <-- THIS NEEDS TO BE CHANGED!!!!
+								'type' => 'activity_update',
+								'action' => "<a href='{$url}/members/{$commentUid}'>{COMMENTER}</a> commented on <a href='{$url}/members/{$userUid}'>{COMMENTED}</a> profile.",
+								'primary_link' => "{$url}/members/{$userUid}",
+								'content' => $comm['description'],
+								'date_recorded' => $comm['createdDate'],
+								'secondary_item_id' => str_replace( ':Comment:', '-', $comm['id'] )
+							), 
+							array('%d', '%s', '%s', '%d', '%s', '%s', '%s')
+						);
+						//output feedback
+						if( $commentAdded ){
+							$this->numComments++;
+							//if( $this->numComments === 10 ) $this->run = false;
+							WP_CLI::success("COMMENT: ({$timeStamp}) Comment added for user {$userUid} by user {$commentUid}");
+						}
+						else WP_CLI::warning("COMMENT: upload failed for {$userUid} by user {$commentUid} (starting at char #{$this->startBracketLocation}).");
+					}
+					else WP_CLI::warning("COMMENT: comment already exists for {$userUid} by user {$commentUid} (starting at char #{$this->startBracketLocation}).");
+				}//!empty($commentUser)
+				else WP_CLI::warning('COMMENT: Upload failed. No user with a Ning ID of ' . $comm['contributorName'] . ' was found.');
+			}//!empty($comm) && !empty($userUid)
 		}//addComment()
+
 
 
 		//ADD PROFILE DATA
@@ -271,7 +309,7 @@
 			$dbPrefix = $wpdb->base_prefix;
 			$uid = $this->user;
 
-			if( empty($field) ) WP_CLI::warning('PROFILE DATA: profile field with ID of "' .$field. '" not found. This type does not yet exist, so no record has been added.');
+			if( empty($field) ) WP_CLI::warning('PROFILE DATA: field not provided, no entry added.');
 			else{
 				//see if record already exists for user
 				$record = $wpdb->get_row( "SELECT id FROM {$dbPrefix}bp_xprofile_data WHERE user_id='{$uid}' AND field_id='{$field}'" );
@@ -291,20 +329,22 @@
 				}
 
 				//output feedback
-				if( $dataAdded ) WP_CLI::success("PROFILE DATA: User ID {$uid} '{$field}' added");
+				if( $dataAdded ) WP_CLI::success("PROFILE DATA: User ID {$uid} '{$this->fieldDataModel['profileQuestions'][$field]}' added");
 				else WP_CLI::warning("PROFILE DATA: Attempt to add '{$field}' for user ID {$uid}");
 			}
 		}//addProfileData()
 
 
-		function migrate( $iArr, $aArr ){
+
+		public function migrate( $iArr, $aArr ){
 			//CHECK THAT JSON FILE HAS BEEN PROVIDED - if not throw an error
 			if( !empty($iArr[0]) && !file_exists(dirname(__FILE__)."/../json/{$iArr[0]}" ) ) WP_CLI::error( "Migration Failed - JSON file not found" );
 
 			global $wpdb;
 			$dbPrefix = $wpdb->base_prefix;
 			$json = file_get_contents(dirname(__FILE__)."/../json/{$iArr[0]}");
-
+//echo preg_match_all('/"level":/', $json);
+//return;
 			//FIX "BAD" JSON
 			$json = preg_replace('/((;|:)-?)\}/', '$1&#125;', $json);// fix :-}
 			$json = preg_replace('/\]\{/',',{',$json);//fix ]{ -> ,{
@@ -325,7 +365,7 @@
 				if( !empty($numRecordsToRecord) && $numRecordsToRecord === $this->numMembers) break;
 
 				//this is ne user's json
-				if( $numBrackets === 0 && $json[$i] == ',' ){
+				if( $numBrackets === 0 && ($json[$i] == ',' $i===$stopChar) ){
 					$this->parseJsonString( $this->memberArray[$this->numMembers], $i, $action );
 					$this->numMembers++;
 					//stop loop when a json error is hit
@@ -340,12 +380,13 @@
 			    if( $json[$i] == "}" ) $numBrackets--;
 			}//for loop
 			//PRINT RESULTS
-			echo "\n\n\n==========================\n::SUMMARY::\n==========================\n";
+			echo "\n\n\n==========================\n::MIGRATION SUMMARY::\n==========================\n";
 			echo "{$stopChar} characters read.\n";
-			echo "There were {$this->numberRecords} TOTAL records!\n";
-			echo "There were {$this->numRecordsAdded} ADDED records!\n";
+			echo "There were {$this->numMembers} TOTAL user records!\n";
+			echo "There were {$this->numRecordsAdded} USERS added!\n";
+			echo "There were {$this->numComments} COMMENTS added!\n";
 			echo "There were {$this->incompleteRecords} INCOMPLETE records {$this->incompleteRecordsDups} of them are duplicate users!\n";
-			echo "There were {$this->badRecords} BAD records!\n";
+			echo "There were {$this->badRecords} BAD user records!\n";
 			echo "Run started at {$this->startTime}\n";
 			echo "Run ended at ".date('Y-m-d H:i:s')."\n";
 			if( !empty($this->badJSON) ){
