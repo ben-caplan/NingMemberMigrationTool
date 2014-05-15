@@ -63,7 +63,8 @@
 						'12' => "My favorite public servant is:"
 					),
 					"profilePhoto"
-				);
+				), 
+				$userDataArray = array("gender", "location", "country", "zip", "birthdate", "profilePhoto");
 
 		//GENERAT PASSWORD
 		private function generatePassword( $length ){
@@ -83,7 +84,6 @@
 				$dataArray = array( 'profile_data' => array() );
 				$user = $wpdb->get_row("SELECT wp_id FROM {$dbPrefix}ning_user_lookup WHERE ning_id='{$jsonItem['contributorName']}'");
 				$timeStamp = date('Y-m-d H:i:s');
-
 
 				//ADD USER
 				if( $action === 'users' ){
@@ -118,7 +118,6 @@
 						}//in_array($fieldKey, $this->fieldDataModel)
 					}//foreach $jsonItem
 
-
 					//ADD DATA TO DATABASE
 					if( empty($user) ){
 						//ADD USER
@@ -135,10 +134,15 @@
 						else WP_CLI::warning("PROFILE DATA: upload failed. Something went wrong with the upload (starting at char #{$this->startBracketLocation}).");
 
 						//ADD PROFILE DATA
+						//profile questions
 						if( !empty($dataArray['profile_data']) ){
 							foreach( $dataArray['profile_data'] as $field=>$value ){
-								$profileDataAdded = $this->addProfileData( $field, $value );
+								if(!empty($value)) $profileDataAdded = $this->addProfileData( $field, $value );
 							}
+						}
+						//general data
+						foreach( $this->userDataArray as $uData ){
+							if( !empty($dataArray[$uData]) ) $userDataAdded = $this->addProfileData( $uData, $dataArray[$uData] );
 						}
 					}//empty($user)
 					else{
@@ -212,10 +216,11 @@
 			$user = false;
 			//possibly change this to look for existance of ning username in usermeta table instead
 			//$record = $wpdb->get_row( "SELECT ID, user_email FROM {$wpdb->base_prefix}users WHERE user_email='{$data['email']}'" );
-			$record = $wpdb->get_row( "SELECT wp_id, ning_id FROM {$wpdb->base_prefix}ning_user_lookup WHERE ning_id='{$jsonItem['contributorName']}'" );
+			$record = $wpdb->get_row( "SELECT wp_id, ning_id FROM {$wpdb->base_prefix}ning_user_lookup WHERE ning_id='{$data['contributorName']}'" );
 			if( $record ){
 				$this->user = $record->wp_id;
 				WP_CLI::warning( 'USER: ' . $record->ning_id . '" already exists.' );
+
 			}
 			else{
 				//CREATE USER
@@ -277,7 +282,7 @@
 							$wpdb->base_prefix.'bp_activity', 
 							array(
 								'user_id' => $commentUid,
-								'component' => 'ning_comment',// <-- THIS NEEDS TO BE CHANGED!!!!
+								'component' => 'activity',
 								'type' => 'activity_update',
 								'action' => "<a href='{$url}/members/{$commentUid}'>{COMMENTER}</a> commented on <a href='{$url}/members/{$userUid}'>{COMMENTED}</a> profile.",
 								'primary_link' => "{$url}/members/{$userUid}",
@@ -311,26 +316,36 @@
 
 			if( empty($field) ) WP_CLI::warning('PROFILE DATA: field not provided, no entry added.');
 			else{
-				//see if record already exists for user
-				$record = $wpdb->get_row( "SELECT id FROM {$dbPrefix}bp_xprofile_data WHERE user_id='{$uid}' AND field_id='{$field}'" );
-				if( $record ) return WP_CLI::line('PROFILE DATA: a record already exists for this user.');
-				else{
-					//add profile data
-					$dataAdded = $wpdb->insert(
-						$dbPrefix.'bp_xprofile_data',
-						array(
-							'field_id' => $field,
-							'user_id' => $uid,
-							'value' => $value, 
-							'last_updated' => date( 'Y-m-d H:i:s', time() )
-						), 
-						array('%d', '%d', '%s')
-					);
+				//PROFILE IMAGE
+				if( $field === 'profilePhoto' ){
+					$localAvatarThumb = dirname(__FILE__)."/../../uploads/avatars/{$uid}-bpthumb.jpg";
+					$localAvatarFull = dirname(__FILE__)."/../../uploads/avatars/{$uid}-bpfull.jpg";
+					if( !file_exists($localAvatarThumb) ) copy( $value, $localAvatarThumb );
+					if( !file_exists($localAvatarFull) ) copy( $value, $localAvatarFull );
 				}
+				//OTHER DATA
+				else{
+					//see if record already exists for user
+					$record = $wpdb->get_row( "SELECT id FROM {$dbPrefix}bp_xprofile_data WHERE user_id='{$uid}' AND field_id='{$field}'" );
+					if( $record ) return WP_CLI::line('PROFILE DATA: a record already exists for this user.');
+					else{
+						//add profile data
+						$dataAdded = $wpdb->insert(
+							$dbPrefix.'bp_xprofile_data',
+							array(
+								'field_id' => $field,
+								'user_id' => $uid,
+								'value' => $value, 
+								'last_updated' => date( 'Y-m-d H:i:s', time() )
+							), 
+							array('%d', '%d', '%s')
+						);
+					}
 
-				//output feedback
-				if( $dataAdded ) WP_CLI::success("PROFILE DATA: User ID {$uid} '{$this->fieldDataModel['profileQuestions'][$field]}' added");
-				else WP_CLI::warning("PROFILE DATA: Attempt to add '{$field}' for user ID {$uid}");
+					//output feedback
+					if( $dataAdded ) WP_CLI::success("PROFILE DATA: User ID {$uid} '{$field}' added");
+					else WP_CLI::warning("PROFILE DATA: Attempt to add '{$field}' for user ID {$uid} failed");
+				}
 			}
 		}//addProfileData()
 
@@ -343,8 +358,8 @@
 			global $wpdb;
 			$dbPrefix = $wpdb->base_prefix;
 			$json = file_get_contents(dirname(__FILE__)."/../json/{$iArr[0]}");
-//echo preg_match_all('/"level":/', $json);
-//return;
+// echo preg_match_all('/:Comment:/', $json);
+// return;
 			//FIX "BAD" JSON
 			$json = preg_replace('/((;|:)-?)\}/', '$1&#125;', $json);// fix :-}
 			$json = preg_replace('/\]\{/',',{',$json);//fix ]{ -> ,{
@@ -364,8 +379,8 @@
 			for($i=$startChar; $i<$stopChar; $i++){
 				if( !empty($numRecordsToRecord) && $numRecordsToRecord === $this->numMembers) break;
 
-				//this is ne user's json
-				if( $numBrackets === 0 && ($json[$i] == ',' $i===$stopChar) ){
+				//this is the user's json
+				if( $numBrackets === 0 && ($json[$i] == ',' || $i===$stopChar) ){
 					$this->parseJsonString( $this->memberArray[$this->numMembers], $i, $action );
 					$this->numMembers++;
 					//stop loop when a json error is hit
